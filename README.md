@@ -6,6 +6,8 @@
 
 AmneziaWG compatible wireguard client that exposes itself as a socks5/http proxy or tunnels. Forked from [wireproxy](https://github.com/pufferffish/wireproxy)
 
+(This vibe-coded modification was made in a couple of evenings. Perhaps it will be useful to someone until the project's author implements UDP support.)
+
 # What is this
 
 `wireproxy` is a completely userspace application that connects to a wireguard peer,
