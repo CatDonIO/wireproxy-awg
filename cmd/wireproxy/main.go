@@ -11,6 +11,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"strconv"
+	"strings"
 	"syscall"
 
 	"github.com/akamensky/argparse"
@@ -152,6 +153,38 @@ func lockNetwork(sections []wireproxyawg.RoutineSpawner, infoAddr *string) {
 	panicIfError(landlock.V4.BestEffort().RestrictNet(rules...))
 }
 
+// parseSocks5Addr парсит адрес SOCKS5 в формате:
+// host:port или user:password@host:port
+func parseSocks5Addr(addr string) (bindAddress, username, password string, err error) {
+	// Проверяем есть ли @ (значит есть аутентификация)
+	if strings.Contains(addr, "@") {
+		parts := strings.SplitN(addr, "@", 2)
+		if len(parts) != 2 {
+			return "", "", "", fmt.Errorf("invalid format: expected user:password@host:port")
+		}
+		
+		// Парсим user:password
+		auth := strings.SplitN(parts[0], ":", 2)
+		if len(auth) != 2 {
+			return "", "", "", fmt.Errorf("invalid auth format: expected user:password")
+		}
+		
+		username = auth[0]
+		password = auth[1]
+		bindAddress = parts[1]
+	} else {
+		// Простой адрес host:port
+		bindAddress = addr
+	}
+	
+	// Проверяем что адрес содержит порт
+	if _, _, err := net.SplitHostPort(bindAddress); err != nil {
+		return "", "", "", fmt.Errorf("address must include port (e.g., host:port)")
+	}
+	
+	return bindAddress, username, password, nil
+}
+
 func main() {
 	s := make(chan os.Signal, 1)
 	signal.Notify(s, syscall.SIGINT, syscall.SIGQUIT)
@@ -181,19 +214,8 @@ func main() {
 	printVerison := parser.Flag("v", "version", &argparse.Options{Help: "Print version"})
 	configTest := parser.Flag("n", "configtest", &argparse.Options{Help: "Configtest mode. Only check the configuration file for validity."})
 	
-	// SOCKS5 аргументы
-	socks5Addr := parser.String("", "socks5", &argparse.Options{
-		Help: "Start SOCKS5 proxy on specified address (e.g., 127.0.0.1:1080)",
-	})
-	
-	// 🔥 ДОБАВЛЕНЫ: Аргументы для аутентификации SOCKS5
-	socks5User := parser.String("", "socks5-user", &argparse.Options{
-		Help: "Username for SOCKS5 authentication (requires --socks5)",
-	})
-	
-	socks5Pass := parser.String("", "socks5-pass", &argparse.Options{
-		Help: "Password for SOCKS5 authentication (requires --socks5)",
-	})
+	// 🔥 ПРОСТОЙ АРГУМЕНТ: SOCKS5 прокси
+	socks5Addr := parser.String("", "socks5", &argparse.Options{Help: "Start SOCKS5 proxy. Format: host:port or user:password@host:port"})
 
 	err := parser.Parse(args)
 	if err != nil {
@@ -215,12 +237,6 @@ func main() {
         }
 	}
 
-	// Валидация: если указан user или pass, то должен быть указан и socks5Addr
-	if (*socks5User != "" || *socks5Pass != "") && *socks5Addr == "" {
-		fmt.Println("Error: --socks5-user and --socks5-pass require --socks5 to be specified")
-		return
-	}
-
 	if !*daemon {
 		lock("read-config")
 	}
@@ -237,17 +253,22 @@ func main() {
 
 	// Добавляем SOCKS5 из аргументов командной строки если указан
 	if *socks5Addr != "" {
+		bindAddress, username, password, err := parseSocks5Addr(*socks5Addr)
+		if err != nil {
+			log.Fatalf("Failed to parse SOCKS5 address: %v", err)
+		}
+
 		socks5Config := &wireproxyawg.Socks5Config{
-			BindAddress: *socks5Addr,
-			Username:    *socks5User,
-			Password:    *socks5Pass,
+			BindAddress: bindAddress,
+			Username:    username,
+			Password:    password,
 		}
 		conf.Routines = append(conf.Routines, socks5Config)
 		
-		if *socks5User != "" {
-			log.Printf("Added SOCKS5 proxy with authentication on %s", *socks5Addr)
+		if username != "" {
+			log.Printf("Added SOCKS5 proxy with authentication on %s", bindAddress)
 		} else {
-			log.Printf("Added SOCKS5 proxy (no auth) on %s", *socks5Addr)
+			log.Printf("Added SOCKS5 proxy (no auth) on %s", bindAddress)
 		}
 	}
 
