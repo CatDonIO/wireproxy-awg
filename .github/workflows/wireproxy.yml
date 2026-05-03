@@ -2,7 +2,6 @@ name: Cross compile WireProxy
 
 on:
   workflow_dispatch:
-  create:
   push:
     tags:
       - "v*"
