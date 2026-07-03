@@ -158,9 +158,21 @@ func (config *Socks5Config) SpawnRoutine(vt *VirtualTun) {
 
 	server := socks5.NewServer(options...)
 
-	if err := server.ListenAndServe("tcp", config.BindAddress); err != nil {
-		log.Fatal(err)
-	}
+	// Launch TCP SOCKS5 server
+	go func() {
+		log.Printf("SOCKS5 TCP server listening on %s", config.BindAddress)
+		if err := server.ListenAndServe("tcp", config.BindAddress); err != nil {
+			log.Printf("SOCKS5 TCP server error: %v", err)
+		}
+	}()
+
+	// Launch UDP SOCKS5 server
+	go func() {
+		log.Printf("SOCKS5 UDP server listening on %s", config.BindAddress)
+		if err := StartSocks5UDPServer(config.BindAddress, vt); err != nil {
+			log.Printf("SOCKS5 UDP server error: %v", err)
+		}
+	}()
 }
 
 // SpawnRoutine spawns a http server.
@@ -293,7 +305,6 @@ func tcpServerForward(vt *VirtualTun, raddr *addressPort, conn net.Conn) {
 
 	go connForward(sconn, conn)
 	go connForward(conn, sconn)
-
 }
 
 // SpawnRoutine spawns a TCP server on wireguard which acts as a proxy to the specified target
