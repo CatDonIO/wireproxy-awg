@@ -541,10 +541,10 @@ func StartSocks5UDPServer(bindAddress string, vt *VirtualTun) error {
 	}()
 
 	// Оптимизация буферов сокета
-	if err := conn.SetReadBuffer(32 * 1024); err != nil {
+	if err := conn.SetReadBuffer(64 * 1024); err != nil {
 		errorLogger.Printf("Warning: failed to set read buffer: %v", err)
 	}
-	if err := conn.SetWriteBuffer(32 * 1024); err != nil {
+	if err := conn.SetWriteBuffer(64 * 1024); err != nil {
 		errorLogger.Printf("Warning: failed to set write buffer: %v", err)
 	}
 
