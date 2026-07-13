@@ -19,13 +19,15 @@ const (
 	udpConnectionTimeout = 40 * time.Second
 	udpCleanupInterval   = 30 * time.Second
 	dnsCacheTTL          = 5 * time.Second
+	dnsCacheMaxSize      = 1000
 )
 
 // ========== DNS КЭШ ==========
 type dnsCache struct {
-	cache map[string]*cacheEntry
-	mu    sync.RWMutex
-	ttl   time.Duration
+	cache   map[string]*cacheEntry
+	mu      sync.RWMutex
+	ttl     time.Duration
+	maxSize int
 }
 
 type cacheEntry struct {
@@ -35,8 +37,9 @@ type cacheEntry struct {
 
 func newDNSCache(ttl time.Duration) *dnsCache {
 	return &dnsCache{
-		cache: make(map[string]*cacheEntry),
-		ttl:   ttl,
+		cache:   make(map[string]*cacheEntry),
+		ttl:     ttl,
+		maxSize: dnsCacheMaxSize,
 	}
 }
 
@@ -70,11 +73,27 @@ func (d *dnsCache) Resolve(host string) (net.IP, error) {
 	}
 
 	d.mu.Lock()
+	defer d.mu.Unlock()
+
+	// Ограничиваем размер кэша
+	if len(d.cache) >= d.maxSize {
+		oldest := time.Now()
+		var oldestKey string
+		for key, entry := range d.cache {
+			if entry.timestamp.Before(oldest) {
+				oldest = entry.timestamp
+				oldestKey = key
+			}
+		}
+		if oldestKey != "" {
+			delete(d.cache, oldestKey)
+		}
+	}
+
 	d.cache[host] = &cacheEntry{
 		ip:        ip,
 		timestamp: time.Now(),
 	}
-	d.mu.Unlock()
 	return ip, nil
 }
 
@@ -119,9 +138,12 @@ type udpConnection struct {
 	closed     bool
 	mu         sync.Mutex
 	writeMu    sync.Mutex
+	ctx        context.Context
+	cancel     context.CancelFunc
 }
 
 func newUDPConnection(conn net.Conn, client *net.UDPAddr, targetAddr *net.UDPAddr, resolvedIP net.IP) *udpConnection {
+	ctx, cancel := context.WithCancel(context.Background())
 	return &udpConnection{
 		conn:       conn,
 		lastUsed:   time.Now(),
@@ -129,6 +151,8 @@ func newUDPConnection(conn net.Conn, client *net.UDPAddr, targetAddr *net.UDPAdd
 		targetAddr: targetAddr,
 		resolvedIP: resolvedIP,
 		closeChan:  make(chan struct{}),
+		ctx:        ctx,
+		cancel:     cancel,
 	}
 }
 
@@ -139,6 +163,7 @@ func (c *udpConnection) Close() {
 		return
 	}
 	c.closed = true
+	c.cancel()
 	close(c.closeChan)
 	_ = c.conn.Close()
 }
@@ -149,6 +174,10 @@ func (c *udpConnection) IsClosed() bool {
 	return c.closed
 }
 
+func (c *udpConnection) Context() context.Context {
+	return c.ctx
+}
+
 // ========== ПУЛ СОЕДИНЕНИЙ ==========
 type udpConnectionPool struct {
 	connections  map[string]*udpConnection
@@ -157,13 +186,50 @@ type udpConnectionPool struct {
 	maxSize      int
 	currentSize  int
 	creationLock sync.Map
+	ctx          context.Context
+	cancel       context.CancelFunc
+	wg           sync.WaitGroup
 }
 
 func newUDPConnectionPool(maxSize int) *udpConnectionPool {
-	return &udpConnectionPool{
+	ctx, cancel := context.WithCancel(context.Background())
+	pool := &udpConnectionPool{
 		connections: make(map[string]*udpConnection),
 		dnsCache:    newDNSCache(dnsCacheTTL),
 		maxSize:     maxSize,
+		ctx:         ctx,
+		cancel:      cancel,
+	}
+
+	// Запускаем горутину очистки внутри пула
+	pool.wg.Add(1)
+	go pool.cleanupRoutine()
+
+	return pool
+}
+
+func (p *udpConnectionPool) cleanupRoutine() {
+	defer p.wg.Done()
+
+	ticker := time.NewTicker(udpCleanupInterval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-p.ctx.Done():
+			// Закрываем все соединения при завершении
+			p.mu.Lock()
+			for _, conn := range p.connections {
+				conn.Close()
+			}
+			p.connections = make(map[string]*udpConnection)
+			p.currentSize = 0
+			p.mu.Unlock()
+			return
+		case <-ticker.C:
+			p.Cleanup(udpConnectionTimeout)
+			p.dnsCache.Cleanup()
+		}
 	}
 }
 
@@ -287,6 +353,11 @@ func (p *udpConnectionPool) resolveTarget(host string, port uint16) (string, net
 	return net.JoinHostPort(ip.String(), strconv.Itoa(int(port))), ip, nil
 }
 
+func (p *udpConnectionPool) Shutdown() {
+	p.cancel()
+	p.wg.Wait()
+}
+
 // ========== ПАРСИНГ SOCKS5 UDP ЗАГОЛОВКА ==========
 func parseSocks5UDPHeader(data []byte) (host string, port uint16, headerLen int, ok bool) {
 	if len(data) < 4 {
@@ -394,6 +465,8 @@ func startUDPReader(conn *udpConnection, serverConn *net.UDPConn, pool *udpConne
 		select {
 		case <-conn.closeChan:
 			return
+		case <-conn.ctx.Done():
+			return
 		default:
 		}
 
@@ -414,7 +487,11 @@ func startUDPReader(conn *udpConnection, serverConn *net.UDPConn, pool *udpConne
 		}
 
 		conn.lastUsed = time.Now()
-		sendUDPResponse(serverConn, conn.client, conn.resolvedIP, conn.targetAddr.Port, buf[:n])
+		
+		// Копируем данные для отправки, т.к. буфер будет возвращен в пул
+		data := make([]byte, n)
+		copy(data, buf[:n])
+		sendUDPResponse(serverConn, conn.client, conn.resolvedIP, conn.targetAddr.Port, data)
 	}
 }
 
@@ -426,6 +503,7 @@ func handleUDPPacket(serverConn *net.UDPConn, clientAddr *net.UDPAddr, data []by
 		return
 	}
 
+	// Копируем полезную нагрузку, т.к. data будет возвращена в пул
 	payload := make([]byte, len(data)-headerLen)
 	copy(payload, data[headerLen:])
 
@@ -445,6 +523,7 @@ func handleUDPPacket(serverConn *net.UDPConn, clientAddr *net.UDPAddr, data []by
 	}
 
 	go func() {
+		// Убеждаемся, что creationLock будет снят в любом случае
 		defer pool.creationLock.Delete(connKey)
 
 		targetAddr, resolvedIP, err := pool.resolveTarget(host, port)
@@ -491,6 +570,8 @@ type socks5UDPServer struct {
 	ctx    context.Context
 	cancel context.CancelFunc
 	wg     sync.WaitGroup
+	conn   *net.UDPConn
+	pool   *udpConnectionPool
 }
 
 func newSocks5UDPServer(addr string, vt *VirtualTun) *socks5UDPServer {
@@ -513,6 +594,7 @@ func (s *socks5UDPServer) Start() error {
 	if err != nil {
 		return fmt.Errorf("failed to listen on UDP: %w", err)
 	}
+	s.conn = conn
 
 	errorLogger.Printf("SOCKS5 UDP listening on %s", s.addr)
 
@@ -523,21 +605,19 @@ func (s *socks5UDPServer) Start() error {
 		errorLogger.Printf("Warning: failed to set write buffer: %v", err)
 	}
 
-	pool := newUDPConnectionPool(maxUDPConnections)
+	s.pool = newUDPConnectionPool(maxUDPConnections)
 
 	s.wg.Add(1)
-	go s.cleanupRoutine(pool)
-
-	s.wg.Add(1)
-	go s.serve(conn, pool)
+	go s.serve()
 
 	return nil
 }
 
-func (s *socks5UDPServer) serve(conn *net.UDPConn, pool *udpConnectionPool) {
+func (s *socks5UDPServer) serve() {
 	defer s.wg.Done()
 	// nolint:errcheck // close errors are not critical
-	defer conn.Close()
+	defer s.conn.Close()
+	defer s.pool.Shutdown()
 
 	for {
 		select {
@@ -548,12 +628,12 @@ func (s *socks5UDPServer) serve(conn *net.UDPConn, pool *udpConnectionPool) {
 
 		buf := getUDPBuffer()
 
-		if err := conn.SetReadDeadline(time.Now().Add(100 * time.Millisecond)); err != nil {
+		if err := s.conn.SetReadDeadline(time.Now().Add(100 * time.Millisecond)); err != nil {
 			putUDPBuffer(buf)
 			continue
 		}
 
-		n, clientAddr, err := conn.ReadFromUDP(buf)
+		n, clientAddr, err := s.conn.ReadFromUDP(buf)
 		if err != nil {
 			putUDPBuffer(buf)
 			if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
@@ -563,31 +643,20 @@ func (s *socks5UDPServer) serve(conn *net.UDPConn, pool *udpConnectionPool) {
 			return
 		}
 
+		// Создаем копию данных для горутины
 		data := make([]byte, n)
 		copy(data, buf[:n])
 		putUDPBuffer(buf)
 
-		s.wg.Add(1)
-		go func() {
-			defer s.wg.Done()
-			handleUDPPacket(conn, clientAddr, data, s.vt, pool)
-		}()
-	}
-}
-
-func (s *socks5UDPServer) cleanupRoutine(pool *udpConnectionPool) {
-	defer s.wg.Done()
-
-	ticker := time.NewTicker(udpCleanupInterval)
-	defer ticker.Stop()
-
-	for {
 		select {
 		case <-s.ctx.Done():
 			return
-		case <-ticker.C:
-			pool.Cleanup(udpConnectionTimeout)
-			pool.dnsCache.Cleanup()
+		default:
+			s.wg.Add(1)
+			go func() {
+				defer s.wg.Done()
+				handleUDPPacket(s.conn, clientAddr, data, s.vt, s.pool)
+			}()
 		}
 	}
 }
@@ -654,11 +723,17 @@ func (s *socks5TCPServer) serve() {
 			}
 		}
 
-		s.wg.Add(1)
-		go func() {
-			defer s.wg.Done()
-			s.handleTCP(conn)
-		}()
+		select {
+		case <-s.ctx.Done():
+			conn.Close()
+			return
+		default:
+			s.wg.Add(1)
+			go func() {
+				defer s.wg.Done()
+				s.handleTCP(conn)
+			}()
+		}
 	}
 }
 
@@ -883,6 +958,7 @@ func (s *CustomSocks5Server) Start() error {
 		return err
 	}
 	if err := s.udp.Start(); err != nil {
+		s.tcp.Shutdown()
 		return err
 	}
 	return nil
