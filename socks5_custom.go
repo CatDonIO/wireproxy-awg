@@ -20,6 +20,8 @@ const (
 	udpCleanupInterval   = 30 * time.Second
 	dnsCacheTTL          = 5 * time.Second
 	dnsCacheMaxSize      = 1000
+	udpWriteTimeout      = 5 * time.Second
+	udpReadTimeout       = 10 * time.Second
 )
 
 // ========== DNS КЭШ ==========
@@ -140,6 +142,7 @@ type udpConnection struct {
 	writeMu    sync.Mutex
 	ctx        context.Context
 	cancel     context.CancelFunc
+	readDone   chan struct{}
 }
 
 func newUDPConnection(conn net.Conn, client *net.UDPAddr, targetAddr *net.UDPAddr, resolvedIP net.IP) *udpConnection {
@@ -153,6 +156,7 @@ func newUDPConnection(conn net.Conn, client *net.UDPAddr, targetAddr *net.UDPAdd
 		closeChan:  make(chan struct{}),
 		ctx:        ctx,
 		cancel:     cancel,
+		readDone:   make(chan struct{}),
 	}
 }
 
@@ -166,6 +170,11 @@ func (c *udpConnection) Close() {
 	c.cancel()
 	close(c.closeChan)
 	_ = c.conn.Close()
+	// Ждем завершения reader горутины
+	select {
+	case <-c.readDone:
+	case <-time.After(2 * time.Second):
+	}
 }
 
 func (c *udpConnection) IsClosed() bool {
@@ -176,6 +185,10 @@ func (c *udpConnection) IsClosed() bool {
 
 func (c *udpConnection) Context() context.Context {
 	return c.ctx
+}
+
+func (c *udpConnection) MarkReadDone() {
+	close(c.readDone)
 }
 
 // ========== ПУЛ СОЕДИНЕНИЙ ==========
@@ -249,11 +262,8 @@ func (p *udpConnectionPool) Set(key string, conn *udpConnection) bool {
 	defer p.mu.Unlock()
 
 	if p.currentSize >= p.maxSize {
-		toRemove := p.maxSize / 5
-		if toRemove < 1 {
-			toRemove = 1
-		}
-		p.cleanupOldestLocked(toRemove)
+		// Принудительно удаляем самые старые соединения
+		p.cleanupOldestLocked(p.maxSize / 2)
 		if p.currentSize >= p.maxSize {
 			return false
 		}
@@ -445,6 +455,7 @@ func sendUDPResponse(serverConn *net.UDPConn, clientAddr *net.UDPAddr, targetIP 
 		copy(buf[22:], data)
 	}
 
+	_ = serverConn.SetWriteDeadline(time.Now().Add(udpWriteTimeout))
 	_, _ = serverConn.WriteToUDP(buf, clientAddr)
 }
 
@@ -454,6 +465,7 @@ func startUDPReader(conn *udpConnection, serverConn *net.UDPConn, pool *udpConne
 		if r := recover(); r != nil {
 			errorLogger.Printf("UDP reader panic recovered: %v", r)
 		}
+		conn.MarkReadDone()
 		conn.Close()
 		pool.Delete(connKey)
 	}()
@@ -470,13 +482,13 @@ func startUDPReader(conn *udpConnection, serverConn *net.UDPConn, pool *udpConne
 		default:
 		}
 
-		if err := conn.conn.SetReadDeadline(time.Now().Add(50 * time.Millisecond)); err != nil {
-			return
-		}
+		_ = conn.conn.SetReadDeadline(time.Now().Add(udpReadTimeout))
 
 		n, err := conn.conn.Read(buf)
 		if err != nil {
 			if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
+				// Таймаут - проверяем, жив ли клиент
+				conn.lastUsed = time.Now()
 				continue
 			}
 			return
@@ -487,7 +499,7 @@ func startUDPReader(conn *udpConnection, serverConn *net.UDPConn, pool *udpConne
 		}
 
 		conn.lastUsed = time.Now()
-		
+
 		// Копируем данные для отправки, т.к. буфер будет возвращен в пул
 		data := make([]byte, n)
 		copy(data, buf[:n])
@@ -509,12 +521,20 @@ func handleUDPPacket(serverConn *net.UDPConn, clientAddr *net.UDPAddr, data []by
 
 	connKey := clientAddr.String()
 
+	// Проверяем существующее соединение
 	if udpConn, exists := pool.Get(connKey); exists {
 		udpConn.writeMu.Lock()
 		defer udpConn.writeMu.Unlock()
 		if !udpConn.IsClosed() {
+			_ = udpConn.conn.SetWriteDeadline(time.Now().Add(udpWriteTimeout))
 			_, _ = udpConn.conn.Write(payload)
 		}
+		return
+	}
+
+	// Проверяем лимит соединений
+	if pool.currentSize >= pool.maxSize {
+		errorLogger.Printf("UDP connection limit reached (%d), dropping packet from %s", pool.maxSize, connKey)
 		return
 	}
 
@@ -558,6 +578,7 @@ func handleUDPPacket(serverConn *net.UDPConn, clientAddr *net.UDPAddr, data []by
 		conn.writeMu.Lock()
 		defer conn.writeMu.Unlock()
 		if !conn.IsClosed() {
+			_ = conn.conn.SetWriteDeadline(time.Now().Add(udpWriteTimeout))
 			_, _ = conn.conn.Write(payload)
 		}
 	}()
@@ -628,10 +649,7 @@ func (s *socks5UDPServer) serve() {
 
 		buf := getUDPBuffer()
 
-		if err := s.conn.SetReadDeadline(time.Now().Add(100 * time.Millisecond)); err != nil {
-			putUDPBuffer(buf)
-			continue
-		}
+		_ = s.conn.SetReadDeadline(time.Now().Add(100 * time.Millisecond))
 
 		n, clientAddr, err := s.conn.ReadFromUDP(buf)
 		if err != nil {
@@ -719,6 +737,7 @@ func (s *socks5TCPServer) serve() {
 				if !strings.Contains(err.Error(), "closed") {
 					errorLogger.Printf("TCP accept error: %v", err)
 				}
+				time.Sleep(100 * time.Millisecond)
 				continue
 			}
 		}
@@ -741,6 +760,8 @@ func (s *socks5TCPServer) serve() {
 func (s *socks5TCPServer) handleTCP(conn net.Conn) {
 	// nolint:errcheck // close errors are not critical
 	defer conn.Close()
+
+	_ = conn.SetDeadline(time.Now().Add(30 * time.Second))
 
 	buf := make([]byte, 512)
 	n, err := conn.Read(buf)
@@ -776,6 +797,7 @@ func (s *socks5TCPServer) handleTCP(conn net.Conn) {
 			return
 		}
 
+		_ = conn.SetDeadline(time.Now().Add(10 * time.Second))
 		n, err = conn.Read(buf)
 		if err != nil {
 			errorLogger.Printf("Auth read error: %v", err)
@@ -818,6 +840,7 @@ func (s *socks5TCPServer) handleTCP(conn net.Conn) {
 		}
 	}
 
+	_ = conn.SetDeadline(time.Now().Add(10 * time.Second))
 	n, err = conn.Read(buf)
 	if err != nil {
 		errorLogger.Printf("Command read error: %v", err)
@@ -860,6 +883,7 @@ func (s *socks5TCPServer) handleTCP(conn net.Conn) {
 
 	// UDP ASSOCIATE
 	if cmd == 0x03 {
+		_ = conn.SetDeadline(time.Time{}) // Убираем дедлайн
 		_, portStr, _ := net.SplitHostPort(s.addr)
 		port, _ := strconv.Atoi(portStr)
 
@@ -872,8 +896,20 @@ func (s *socks5TCPServer) handleTCP(conn net.Conn) {
 		// nolint:errcheck // write errors are not critical
 		conn.Write(response)
 
-		<-s.ctx.Done()
-		return
+		// Ждем пока клиент закроет соединение или контекст
+		buf2 := make([]byte, 1)
+		for {
+			select {
+			case <-s.ctx.Done():
+				return
+			default:
+				_ = conn.SetReadDeadline(time.Now().Add(1 * time.Second))
+				_, err := conn.Read(buf2)
+				if err != nil {
+					return // Клиент закрыл соединение или ошибка
+				}
+			}
+		}
 	}
 
 	// CONNECT
@@ -909,6 +945,8 @@ func (s *socks5TCPServer) handleTCP(conn net.Conn) {
 	default:
 		return
 	}
+
+	_ = conn.SetDeadline(time.Time{}) // Убираем дедлайн для долгого соединения
 
 	targetAddr := net.JoinHostPort(host, strconv.Itoa(int(port)))
 	target, err := s.vt.Tnet.Dial("tcp", targetAddr)
