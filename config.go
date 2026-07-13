@@ -62,13 +62,6 @@ type Socks5Config struct {
 	Password    string
 }
 
-type HTTPConfig struct {
-	BindAddress string
-	Username    string
-	Password    string
-	CertFile    string
-	KeyFile     string
-}
 
 type ResolveConfig struct {
 	ResolveStrategy string
@@ -441,64 +434,12 @@ func parseSocks5Config(section *ini.Section) (RoutineSpawner, error) {
 	return config, nil
 }
 
-func parseHTTPConfig(section *ini.Section) (RoutineSpawner, error) {
-	config := &HTTPConfig{}
-
-	bindAddress, err := parseString(section, "BindAddress")
-	if err != nil {
-		return nil, err
-	}
-	config.BindAddress = bindAddress
-
-	username, _ := parseString(section, "Username")
-	config.Username = username
-
-	password, _ := parseString(section, "Password")
-	config.Password = password
-
-	certFile, _ := parseString(section, "CertFile")
-	config.CertFile = certFile
-
-	keyFile, _ := parseString(section, "KeyFile")
-	config.KeyFile = keyFile
-
-	return config, nil
-}
-
 func parseResolveConfig(section *ini.Section) (*ResolveConfig, error) {
 	config := &ResolveConfig{}
 
 	resolvStrategy, _ := parseString(section, "ResolveStrategy")
 	config.ResolveStrategy = resolvStrategy
   
-	return config, nil
-}
-
-func parseUDPProxyTunnelConfig(section *ini.Section) (RoutineSpawner, error) {
-	config := &UDPProxyTunnelConfig{}
-
-	bindAddress, err := parseString(section, "BindAddress")
-	if err != nil {
-		return nil, err
-	}
-	config.BindAddress = bindAddress
-
-	target, err := parseString(section, "Target")
-	if err != nil {
-		return nil, err
-	}
-	config.Target = target
-
-	inactivityTimeout := 0
-	if sectionKey, err := section.GetKey("InactivityTimeout"); err == nil {
-		timeoutVal, err := sectionKey.Int()
-		if err != nil {
-			return nil, err
-		}
-		inactivityTimeout = timeoutVal
-	}
-	config.InactivityTimeout = inactivityTimeout
-
 	return config, nil
 }
 
@@ -590,10 +531,6 @@ func ParseConfig(path string) (*Configuration, error) {
 		return nil, err
 	}
 
-	err = parseRoutinesConfig(&routinesSpawners, cfg, "http", parseHTTPConfig)
-	if err != nil {
-		return nil, err
-	}
 
 	if resolveSection, err := cfg.GetSection("Resolve"); err == nil {
 		resolve, err = parseResolveConfig(resolveSection)
@@ -601,11 +538,6 @@ func ParseConfig(path string) (*Configuration, error) {
 			return nil, err
 	  }
   }
-    
-	err = parseRoutinesConfig(&routinesSpawners, cfg, "UDPProxyTunnel", parseUDPProxyTunnelConfig)
-	if err != nil {
-		return nil, err
-	}
 
 	return &Configuration{
 		Device:   device,
