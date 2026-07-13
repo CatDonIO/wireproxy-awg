@@ -536,7 +536,9 @@ func (s *socks5UDPServer) Start() error {
 
 func (s *socks5UDPServer) serve(conn *net.UDPConn, pool *udpConnectionPool) {
 	defer s.wg.Done()
-	defer conn.Close()
+	defer func() {
+		_ = conn.Close()
+	}()
 
 	for {
 		select {
@@ -636,7 +638,11 @@ func (s *socks5TCPServer) Start() error {
 
 func (s *socks5TCPServer) serve() {
 	defer s.wg.Done()
-	defer s.listener.Close()
+	defer func() {
+		if s.listener != nil {
+			_ = s.listener.Close()
+		}
+	}()
 
 	for {
 		conn, err := s.listener.Accept()
@@ -661,7 +667,9 @@ func (s *socks5TCPServer) serve() {
 }
 
 func (s *socks5TCPServer) handleTCP(conn net.Conn) {
-	defer conn.Close()
+	defer func() {
+		_ = conn.Close()
+	}()
 
 	buf := make([]byte, 512)
 	n, err := conn.Read(buf)
@@ -686,7 +694,7 @@ func (s *socks5TCPServer) handleTCP(conn net.Conn) {
 			}
 		}
 		if !hasAuth {
-			conn.Write([]byte{0x05, 0xFF})
+			_, _ = conn.Write([]byte{0x05, 0xFF})
 			errorLogger.Printf("No auth method supported")
 			return
 		}
@@ -721,7 +729,7 @@ func (s *socks5TCPServer) handleTCP(conn net.Conn) {
 		password := string(buf[3+userLen : 3+userLen+passLen])
 
 		if username != s.username || password != s.password {
-			conn.Write([]byte{0x05, 0x01})
+			_, _ = conn.Write([]byte{0x05, 0x01})
 			errorLogger.Printf("Auth failed")
 			return
 		}
@@ -754,7 +762,7 @@ func (s *socks5TCPServer) handleTCP(conn net.Conn) {
 	if cmd == 0xF0 {
 		domainLen := int(buf[4])
 		if n < 5+domainLen {
-			conn.Write([]byte{0x05, 0x04, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00})
+			_, _ = conn.Write([]byte{0x05, 0x04, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00})
 			return
 		}
 		domain := string(buf[5 : 5+domainLen])
@@ -762,7 +770,7 @@ func (s *socks5TCPServer) handleTCP(conn net.Conn) {
 		addr, err := s.vt.ResolveAddrWithContext(s.ctx, domain)
 		if err != nil {
 			errorLogger.Printf("DNS resolution failed: %v", err)
-			conn.Write([]byte{0x05, 0x04, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00})
+			_, _ = conn.Write([]byte{0x05, 0x04, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00})
 			return
 		}
 
@@ -770,7 +778,7 @@ func (s *socks5TCPServer) handleTCP(conn net.Conn) {
 		response := []byte{0x05, 0x00, 0x00, 0x01}
 		response = append(response, ip...)
 		response = append(response, 0x00, 0x00)
-		conn.Write(response)
+		_, _ = conn.Write(response)
 		return
 	}
 
@@ -785,7 +793,7 @@ func (s *socks5TCPServer) handleTCP(conn net.Conn) {
 			0x00, 0x00,
 		}
 		binary.BigEndian.PutUint16(response[8:10], uint16(port))
-		conn.Write(response)
+		_, _ = conn.Write(response)
 
 		<-s.ctx.Done()
 		return
@@ -829,23 +837,25 @@ func (s *socks5TCPServer) handleTCP(conn net.Conn) {
 	target, err := s.vt.Tnet.Dial("tcp", targetAddr)
 	if err != nil {
 		errorLogger.Printf("Failed to connect: %v", err)
-		conn.Write([]byte{0x05, 0x04, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00})
+		_, _ = conn.Write([]byte{0x05, 0x04, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00})
 		return
 	}
-	defer target.Close()
+	defer func() {
+		_ = target.Close()
+	}()
 
-	conn.Write([]byte{0x05, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00})
+	_, _ = conn.Write([]byte{0x05, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00})
 
 	go func() {
-		io.Copy(target, conn)
+		_, _ = io.Copy(target, conn)
 	}()
-	io.Copy(conn, target)
+	_, _ = io.Copy(conn, target)
 }
 
 func (s *socks5TCPServer) Shutdown() {
 	s.cancel()
 	if s.listener != nil {
-		s.listener.Close()
+		_ = s.listener.Close()
 	}
 	s.wg.Wait()
 }
