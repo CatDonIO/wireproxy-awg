@@ -725,6 +725,7 @@ func (s *socks5TCPServer) serve() {
 
 		select {
 		case <-s.ctx.Done():
+			// nolint:errcheck // close errors are not critical
 			conn.Close()
 			return
 		default:
