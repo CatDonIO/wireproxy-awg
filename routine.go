@@ -24,9 +24,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/things-go/go-socks5"
-	"github.com/things-go/go-socks5/bufferpool"
-
 	"net/netip"
 
 	"github.com/amnezia-vpn/amneziawg-go/tun/netstack"
@@ -138,58 +135,26 @@ func (d VirtualTun) resolveToAddrPort(endpoint *addressPort) (*netip.AddrPort, e
 	return &addrPort, nil
 }
 
-// SpawnRoutine spawns a socks5 server.
+// SpawnRoutine spawns a socks5 server using custom implementation.
 func (config *Socks5Config) SpawnRoutine(vt *VirtualTun) {
-	var authMethods []socks5.Authenticator
-	if username := config.Username; username != "" {
-		authMethods = append(authMethods, socks5.UserPassAuthenticator{
-			Credentials: socks5.StaticCredentials{username: config.Password},
-		})
-	} else {
-		authMethods = append(authMethods, socks5.NoAuthAuthenticator{})
+	errorLogger.Printf("Starting SOCKS5 on %s", config.BindAddress)
+
+	server := NewCustomSocks5Server(
+		config.BindAddress,
+		vt,
+		config.Username,
+		config.Password,
+	)
+
+	if err := server.Start(); err != nil {
+		errorLogger.Printf("Failed to start SOCKS5 server: %v", err)
+		return
 	}
 
-	options := []socks5.Option{
-		socks5.WithDial(vt.Tnet.DialContext),
-		socks5.WithResolver(vt),
-		socks5.WithAuthMethods(authMethods),
-		socks5.WithBufferPool(bufferpool.NewPool(256 * 1024)),
-	}
+	errorLogger.Printf("SOCKS5 server listening on %s", config.BindAddress)
 
-	server := socks5.NewServer(options...)
-
-	// Launch TCP SOCKS5 server
-	go func() {
-		log.Printf("SOCKS5 TCP server listening on %s", config.BindAddress)
-		if err := server.ListenAndServe("tcp", config.BindAddress); err != nil {
-			log.Printf("SOCKS5 TCP server error: %v", err)
-		}
-	}()
-
-	// Launch UDP SOCKS5 server
-	go func() {
-		log.Printf("SOCKS5 UDP server listening on %s", config.BindAddress)
-		if err := StartSocks5UDPServer(config.BindAddress, vt); err != nil {
-			log.Printf("SOCKS5 UDP server error: %v", err)
-		}
-	}()
 }
 
-// SpawnRoutine spawns a http server.
-func (config *HTTPConfig) SpawnRoutine(vt *VirtualTun) {
-	server := &HTTPServer{
-		config: config,
-		dial:   vt.Tnet.Dial,
-		auth:   CredentialValidator{config.Username, config.Password},
-	}
-	if config.Username != "" || config.Password != "" {
-		server.authRequired = true
-	}
-
-	if err := server.ListenAndServe("tcp", config.BindAddress); err != nil {
-		log.Fatal(err)
-	}
-}
 
 // Valid checks the authentication data in CredentialValidator and compare them
 // to username and password in constant time.
