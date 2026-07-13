@@ -1,3 +1,14 @@
+Добавлено  
+- кастомный socks5 сервер (по первым тестам память теперь не течет)
+- поддержка UDP ASSOCIATE (работа игр и звонков)
+- запуск socks5 сервера через аргумент командной строки, минуя изменение файла конфигурации
+
+    --socks5 host:port
+
+    --socks5 user:password@host:port
+
+В процессе поиска утечки http сервер и UDPProxyTunnel  были вырезаны
+
 # wireproxy-awg
 
 [![ISC licensed](https://img.shields.io/badge/license-ISC-blue)](./LICENSE)
@@ -5,8 +16,6 @@
 [![Documentation](https://img.shields.io/badge/godoc-wireproxy--awg-blue)](https://pkg.go.dev/github.com/artem-russkikh/wireproxy-awg)
 
 AmneziaWG compatible wireguard client that exposes itself as a socks5/http proxy or tunnels. Forked from [wireproxy](https://github.com/windtf/wireproxy)
-
-- Added SOCKS5 proxy with UDP ASSOCIATE support
 
 # What is this
 
