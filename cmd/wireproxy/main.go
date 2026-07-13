@@ -6,7 +6,6 @@ import (
 	"github.com/landlock-lsm/go-landlock/landlock"
 	"log"
 	"net"
-	"net/http"
 	"os"
 	"os/exec"
 	"os/signal"
@@ -141,8 +140,6 @@ func lockNetwork(sections []wireproxyawg.RoutineSpawner, infoAddr *string) {
 		switch section := section.(type) {
 		case *wireproxyawg.TCPServerTunnelConfig:
 			rules = append(rules, landlock.ConnectTCP(extractPort(section.Target)))
-		case *wireproxyawg.HTTPConfig:
-			rules = append(rules, landlock.BindTCP(extractPort(section.BindAddress)))
 		case *wireproxyawg.TCPClientTunnelConfig:
 			rules = append(rules, landlock.ConnectTCP(uint16(section.BindAddress.Port)))
 		case *wireproxyawg.Socks5Config:
@@ -311,14 +308,6 @@ func main() {
 
 	tun.StartPingIPs()
 
-	if *info != "" {
-		go func() {
-			err := http.ListenAndServe(*info, tun)
-			if err != nil {
-				panic(err)
-			}
-		}()
-	}
 
 	<-ctx.Done()
 }
