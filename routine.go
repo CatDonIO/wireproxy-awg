@@ -24,9 +24,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/things-go/go-socks5"
-	"github.com/things-go/go-socks5/bufferpool"
-
 	"net/netip"
 
 	"github.com/amnezia-vpn/amneziawg-go/tun/netstack"
@@ -138,29 +135,24 @@ func (d VirtualTun) resolveToAddrPort(endpoint *addressPort) (*netip.AddrPort, e
 	return &addrPort, nil
 }
 
-// SpawnRoutine spawns a socks5 server.
+// SpawnRoutine spawns a socks5 server using custom implementation.
 func (config *Socks5Config) SpawnRoutine(vt *VirtualTun) {
-	var authMethods []socks5.Authenticator
-	if username := config.Username; username != "" {
-		authMethods = append(authMethods, socks5.UserPassAuthenticator{
-			Credentials: socks5.StaticCredentials{username: config.Password},
-		})
-	} else {
-		authMethods = append(authMethods, socks5.NoAuthAuthenticator{})
+	errorLogger.Printf("Starting SOCKS5 on %s", config.BindAddress)
+
+	server := NewCustomSocks5Server(
+		config.BindAddress,
+		vt,
+		config.Username,
+		config.Password,
+	)
+
+	if err := server.Start(); err != nil {
+		errorLogger.Printf("Failed to start SOCKS5 server: %v", err)
+		return
 	}
 
-	options := []socks5.Option{
-		socks5.WithDial(vt.Tnet.DialContext),
-		socks5.WithResolver(vt),
-		socks5.WithAuthMethods(authMethods),
-		socks5.WithBufferPool(bufferpool.NewPool(256 * 1024)),
-	}
+	errorLogger.Printf("SOCKS5 server listening on %s", config.BindAddress)
 
-	server := socks5.NewServer(options...)
-
-	if err := server.ListenAndServe("tcp", config.BindAddress); err != nil {
-		log.Fatal(err)
-	}
 }
 
 // SpawnRoutine spawns a http server.
@@ -293,7 +285,6 @@ func tcpServerForward(vt *VirtualTun, raddr *addressPort, conn net.Conn) {
 
 	go connForward(sconn, conn)
 	go connForward(conn, sconn)
-
 }
 
 // SpawnRoutine spawns a TCP server on wireguard which acts as a proxy to the specified target
