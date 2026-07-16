@@ -11,6 +11,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"strconv"
+	"strings"
 	"syscall"
 
 	"github.com/akamensky/argparse"
@@ -23,9 +24,9 @@ import (
 const daemonProcess = "daemon-process"
 
 // default paths for wireproxy config file
-var default_config_paths = []string {
-    "/etc/wireproxy/wireproxy.conf",
-    os.Getenv("HOME")+"/.config/wireproxy.conf",
+var default_config_paths = []string{
+	"/etc/wireproxy/wireproxy.conf",
+	os.Getenv("HOME") + "/.config/wireproxy.conf",
 }
 
 var version = "1.0.17-dev"
@@ -59,12 +60,12 @@ func executablePath() string {
 
 // check if default config file paths exist
 func configFilePath() (string, bool) {
-    for _, path := range default_config_paths {
-        if _, err := os.Stat(path); err == nil {
-            return path, true
-        }
-    }
-    return "", false
+	for _, path := range default_config_paths {
+		if _, err := os.Stat(path); err == nil {
+			return path, true
+		}
+	}
+	return "", false
 }
 
 func lock(stage string) {
@@ -152,6 +153,38 @@ func lockNetwork(sections []wireproxyawg.RoutineSpawner, infoAddr *string) {
 	panicIfError(landlock.V4.BestEffort().RestrictNet(rules...))
 }
 
+// parseSocks5Addr parses SOCKS5 address in format:
+// host:port or user:password@host:port
+func parseSocks5Addr(addr string) (bindAddress, username, password string, err error) {
+	// Check if there is @ (means authentication)
+	if strings.Contains(addr, "@") {
+		parts := strings.SplitN(addr, "@", 2)
+		if len(parts) != 2 {
+			return "", "", "", fmt.Errorf("invalid format: expected user:password@host:port")
+		}
+
+		// Parse user:password
+		auth := strings.SplitN(parts[0], ":", 2)
+		if len(auth) != 2 {
+			return "", "", "", fmt.Errorf("invalid auth format: expected user:password")
+		}
+
+		username = auth[0]
+		password = auth[1]
+		bindAddress = parts[1]
+	} else {
+		// Simple host:port address
+		bindAddress = addr
+	}
+
+	// Check that address contains port
+	if _, _, err := net.SplitHostPort(bindAddress); err != nil {
+		return "", "", "", fmt.Errorf("address must include port (e.g., host:port)")
+	}
+
+	return bindAddress, username, password, nil
+}
+
 func main() {
 	s := make(chan os.Signal, 1)
 	signal.Notify(s, syscall.SIGINT, syscall.SIGQUIT)
@@ -180,6 +213,8 @@ func main() {
 	info := parser.String("i", "info", &argparse.Options{Help: "Specify the address and port for exposing health status"})
 	printVerison := parser.Flag("v", "version", &argparse.Options{Help: "Print version"})
 	configTest := parser.Flag("n", "configtest", &argparse.Options{Help: "Configtest mode. Only check the configuration file for validity."})
+	// SOCKS5 proxy from command line
+	socks5Addr := parser.String("", "socks5", &argparse.Options{Help: "Start SOCKS5 proxy. Format: host:port or user:password@host:port"})
 
 	err := parser.Parse(args)
 	if err != nil {
@@ -193,12 +228,12 @@ func main() {
 	}
 
 	if *config == "" {
-        if path, config_exist := configFilePath(); config_exist {
-            *config = path
-        } else {
-            fmt.Println("configuration path is required")
-            return
-        }
+		if path, config_exist := configFilePath(); config_exist {
+			*config = path
+		} else {
+			fmt.Println("configuration path is required")
+			return
+		}
 	}
 
 	if !*daemon {
@@ -213,6 +248,27 @@ func main() {
 	if *configTest {
 		fmt.Println("Config OK")
 		return
+	}
+
+	// Add SOCKS5 from command line if specified
+	if *socks5Addr != "" {
+		bindAddress, username, password, err := parseSocks5Addr(*socks5Addr)
+		if err != nil {
+			log.Fatalf("Failed to parse SOCKS5 address: %v", err)
+		}
+
+		socks5Config := &wireproxyawg.Socks5Config{
+			BindAddress: bindAddress,
+			Username:    username,
+			Password:    password,
+		}
+		conf.Routines = append(conf.Routines, socks5Config)
+
+		if username != "" {
+			log.Printf("Added SOCKS5 proxy with authentication on %s", bindAddress)
+		} else {
+			log.Printf("Added SOCKS5 proxy (no auth) on %s", bindAddress)
+		}
 	}
 
 	lockNetwork(conf.Routines, info)
