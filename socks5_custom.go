@@ -1144,6 +1144,7 @@ func (s *socks5TCPServer) handleTCP(conn net.Conn) {
 
 	go func() {
 		defer wg.Done()
+		// nolint:errcheck // close errors are not critical
 		defer target.Close() // Закрываем target, когда клиент закончил отправлять
 		// nolint:errcheck // copy errors are not critical
 		io.Copy(target, conn)
@@ -1151,6 +1152,7 @@ func (s *socks5TCPServer) handleTCP(conn net.Conn) {
 
 	go func() {
 		defer wg.Done()
+		// nolint:errcheck // close errors are not critical
 		defer conn.Close() // Закрываем conn, когда target закончил отправлять
 		// nolint:errcheck // copy errors are not critical
 		io.Copy(conn, target)
