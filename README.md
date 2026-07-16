@@ -1,3 +1,12 @@
+Добавлено  
+- кастомный socks5 сервер (попытка исправить memory leak)
+- поддержка UDP ASSOCIATE (работа игр и звонков)
+- запуск socks5 сервера через аргумент командной строки, минуя изменение файла конфигурации
+
+    --socks5 host:port
+
+    --socks5 user:password@host:port
+
 # wireproxy-awg
 
 [![ISC licensed](https://img.shields.io/badge/license-ISC-blue)](./LICENSE)
