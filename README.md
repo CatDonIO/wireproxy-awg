@@ -30,6 +30,7 @@ of wireproxy by [@artem-russkikh](https://github.com/artem-russkikh).
 
 - TCP static routing for client and server
 - SOCKS5/HTTP proxy (HTTP proxy supports both CONNECT tunnelling and plain HTTP forwarding)
+- Transparent TLS ([SNI](https://en.wikipedia.org/wiki/Server_Name_Indication)) proxy
 
 # TODO
 
@@ -149,6 +150,11 @@ BindAddress = 127.0.0.1:25345
 # Specifying certificate and key enables HTTPS
 #CertFile = ...
 #KeyFile = ...
+
+# SNI creates a transparent TLS proxy on your LAN, and all traffic would be routed via wireguard,
+# using Server Name Indication as routing destination.
+[SNI]
+BindAddress = 0.0.0.0:443
 ```
 
 Alternatively, if you already have a wireguard config, you can import it in the

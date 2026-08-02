@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/go-ini/ini"
@@ -60,6 +61,10 @@ type Socks5Config struct {
 	BindAddress string
 	Username    string
 	Password    string
+}
+
+type SNIConfig struct {
+	BindAddress string
 }
 
 type HTTPConfig struct {
@@ -441,6 +446,18 @@ func parseSocks5Config(section *ini.Section) (RoutineSpawner, error) {
 	return config, nil
 }
 
+func parseSNIConfig(section *ini.Section) (RoutineSpawner, error) {
+	config := &SNIConfig{}
+
+	bindAddress, err := parseString(section, "BindAddress")
+	if err != nil {
+		return nil, err
+	}
+	config.BindAddress = bindAddress
+
+	return config, nil
+}
+
 func parseHTTPConfig(section *ini.Section) (RoutineSpawner, error) {
 	config := &HTTPConfig{}
 
@@ -552,7 +569,14 @@ func ParseConfig(path string) (*Configuration, error) {
 	wgConf, err := root.GetKey("WGConfig")
 	wgCfg := cfg
 	if err == nil {
-		wgCfg, err = ini.LoadSources(iniOpt, wgConf.String())
+		wgPath := wgConf.String()
+		// A bare filename (no path separators) is resolved relative to the
+		// directory of the parent config file, so the wg config can sit
+		// alongside the wireproxy config without needing a full path.
+		if filepath.Base(wgPath) == wgPath {
+			wgPath = filepath.Join(filepath.Dir(path), wgPath)
+		}
+		wgCfg, err = ini.LoadSources(iniOpt, wgPath)
 		if err != nil {
 			return nil, err
 		}
@@ -591,6 +615,11 @@ func ParseConfig(path string) (*Configuration, error) {
 	}
 
 	err = parseRoutinesConfig(&routinesSpawners, cfg, "http", parseHTTPConfig)
+	if err != nil {
+		return nil, err
+	}
+
+	err = parseRoutinesConfig(&routinesSpawners, cfg, "SNI", parseSNIConfig)
 	if err != nil {
 		return nil, err
 	}
