@@ -119,6 +119,13 @@ packet.
 | `S4` | bytes | random padding prepended to transport messages |
 | `I1` - `I5` | tag sequence | custom packets sent before every handshake, in order |
 
+> [!NOTE]
+> With `S4` set, amneziawg-go 3.0.3 loses the first data packet of the tunnel:
+> its TUN reader reads the transport padding once, before the device is
+> configured, so that one packet goes out without the padding and the peer drops
+> it. Everything after it is fine. In practice this costs one TCP retransmit on
+> the first connection after start. The bug is in the library, not here.
+
 The `I1`-`I5` value is a sequence of tags:
 
 | Tag | Meaning |
