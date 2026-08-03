@@ -1,10 +1,13 @@
 # wireproxy-awg
 
 [![ISC licensed](https://img.shields.io/badge/license-ISC-blue)](./LICENSE)
-[![Build status](https://github.com/artem-russkikh/wireproxy-awg/actions/workflows/build.yml/badge.svg)](https://github.com/artem-russkikh/wireproxy-awg/actions)
-[![Documentation](https://img.shields.io/badge/godoc-wireproxy--awg-blue)](https://pkg.go.dev/github.com/artem-russkikh/wireproxy-awg)
+[![Build status](https://github.com/anton-vinogradov/wireproxy-awg/actions/workflows/build.yml/badge.svg)](https://github.com/anton-vinogradov/wireproxy-awg/actions)
+[![Documentation](https://img.shields.io/badge/godoc-wireproxy--awg-blue)](https://pkg.go.dev/github.com/anton-vinogradov/wireproxy-awg/v3)
 
-AmneziaWG compatible wireguard client that exposes itself as a socks5/http proxy or tunnels. Forked from [wireproxy](https://github.com/windtf/wireproxy)
+AmneziaWG compatible wireguard client that exposes itself as a socks5/http proxy or tunnels.
+Forked from [wireproxy-awg](https://github.com/artem-russkikh/wireproxy-awg) by
+[@artem-russkikh](https://github.com/artem-russkikh), which is itself a fork of
+[wireproxy](https://github.com/windtf/wireproxy).
 
 # What is this
 
@@ -23,8 +26,7 @@ and configured my browser to use wireproxy for certain sites. It's pretty useful
 wireproxy is completely isolated from my network interfaces, and I don't need root to configure
 anything.
 
-Users who want something similar but for Amnezia VPN can use [this fork](https://github.com/artem-russkikh/wireproxy-awg)
-of wireproxy by [@artem-russkikh](https://github.com/artem-russkikh).
+This fork speaks AmneziaWG, so it also works against an Amnezia VPN server.
 
 # Feature
 
@@ -66,7 +68,7 @@ Arguments:
 # Build instruction
 
 ```bash
-git clone https://github.com/artem-russkikh/wireproxy-awg
+git clone https://github.com/anton-vinogradov/wireproxy-awg
 cd wireproxy-awg
 make
 ```
@@ -74,7 +76,7 @@ make
 # Install
 
 ```bash
-go install github.com/artem-russkikh/wireproxy-awg/cmd/wireproxy@v1.0.17 # or @latest
+go install github.com/anton-vinogradov/wireproxy-awg/v3/cmd/wireproxy@v3.0.0 # or @latest
 ```
 
 # Use with VPN
@@ -386,4 +388,4 @@ The peer which the ICMP ping packet is routed to depends on the `AllowedIPs` set
 
 # Stargazers over time
 
-[![Stargazers over time](https://starchart.cc/artem-russkikh/wireproxy-awg.svg)](https://starchart.cc/artem-russkikh/wireproxy-awg)
+[![Stargazers over time](https://starchart.cc/anton-vinogradov/wireproxy-awg.svg)](https://starchart.cc/anton-vinogradov/wireproxy-awg)

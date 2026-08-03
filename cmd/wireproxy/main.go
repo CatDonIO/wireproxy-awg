@@ -15,7 +15,7 @@ import (
 
 	"github.com/akamensky/argparse"
 	"github.com/amnezia-vpn/amneziawg-go/v3/device"
-	wireproxyawg "github.com/artem-russkikh/wireproxy-awg"
+	wireproxyawg "github.com/anton-vinogradov/wireproxy-awg/v3"
 	"suah.dev/protect"
 )
 
@@ -28,7 +28,7 @@ var default_config_paths = []string {
     os.Getenv("HOME")+"/.config/wireproxy.conf",
 }
 
-var version = "1.0.17-dev"
+var version = "3.0.0-dev"
 
 func panicIfError(err error) {
 	if err != nil {
