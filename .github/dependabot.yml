@@ -11,3 +11,18 @@ updates:
       actions:
         patterns:
           - "*"
+
+  # This is a proxy: x/crypto and x/net are on its critical path, and
+  # amneziawg-go is where the protocol itself lives. Grouped so the noise is one
+  # pull request a month, but amneziawg-go is kept separate - a protocol bump is
+  # worth reading on its own.
+  - package-ecosystem: gomod
+    directory: /
+    schedule:
+      interval: monthly
+    groups:
+      go-dependencies:
+        patterns:
+          - "*"
+        exclude-patterns:
+          - "github.com/amnezia-vpn/*"
