@@ -4,8 +4,10 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"net"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/go-ini/ini"
@@ -17,7 +19,8 @@ type PeerConfig struct {
 	PublicKey    string
 	PreSharedKey string
 	Endpoint     *string
-	KeepAlive    int
+	KeepAlive    int // PersistentKeepalive in seconds; lower bound when a range is configured
+	KeepAliveMax int // upper bound of the PersistentKeepalive range, ignored when below KeepAlive
 	AllowedIPs   []netip.Prefix
 }
 
@@ -60,6 +63,10 @@ type Socks5Config struct {
 	BindAddress string
 	Username    string
 	Password    string
+}
+
+type SNIConfig struct {
+	BindAddress string
 }
 
 type HTTPConfig struct {
@@ -358,11 +365,17 @@ func ParsePeers(cfg *ini.File, peers *[]PeerConfig) error {
 		}
 
 		if sectionKey, err := section.GetKey("PersistentKeepalive"); err == nil {
-			value, err := sectionKey.Int()
-			if err != nil {
-				return err
+			// AmneziaWG 3.0 also accepts a range, and wg-quick accepts "off"
+			raw := strings.TrimSpace(sectionKey.String())
+			if strings.EqualFold(raw, "off") {
+				raw = "0"
 			}
-			peer.KeepAlive = value
+			value, err := parseUintRange(raw)
+			if err != nil {
+				return fmt.Errorf("invalid PersistentKeepalive value: %w", err)
+			}
+			peer.KeepAlive = int(value.min)
+			peer.KeepAliveMax = int(value.max)
 		}
 
 		peer.AllowedIPs, err = parseAllowedIPs(section)
@@ -437,6 +450,18 @@ func parseSocks5Config(section *ini.Section) (RoutineSpawner, error) {
 
 	password, _ := parseString(section, "Password")
 	config.Password = password
+
+	return config, nil
+}
+
+func parseSNIConfig(section *ini.Section) (RoutineSpawner, error) {
+	config := &SNIConfig{}
+
+	bindAddress, err := parseString(section, "BindAddress")
+	if err != nil {
+		return nil, err
+	}
+	config.BindAddress = bindAddress
 
 	return config, nil
 }
@@ -552,7 +577,14 @@ func ParseConfig(path string) (*Configuration, error) {
 	wgConf, err := root.GetKey("WGConfig")
 	wgCfg := cfg
 	if err == nil {
-		wgCfg, err = ini.LoadSources(iniOpt, wgConf.String())
+		wgPath := wgConf.String()
+		// A bare filename (no path separators) is resolved relative to the
+		// directory of the parent config file, so the wg config can sit
+		// alongside the wireproxy config without needing a full path.
+		if filepath.Base(wgPath) == wgPath {
+			wgPath = filepath.Join(filepath.Dir(path), wgPath)
+		}
+		wgCfg, err = ini.LoadSources(iniOpt, wgPath)
 		if err != nil {
 			return nil, err
 		}
@@ -591,6 +623,11 @@ func ParseConfig(path string) (*Configuration, error) {
 	}
 
 	err = parseRoutinesConfig(&routinesSpawners, cfg, "http", parseHTTPConfig)
+	if err != nil {
+		return nil, err
+	}
+
+	err = parseRoutinesConfig(&routinesSpawners, cfg, "SNI", parseSNIConfig)
 	if err != nil {
 		return nil, err
 	}

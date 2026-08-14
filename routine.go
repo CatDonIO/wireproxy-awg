@@ -8,7 +8,7 @@ import (
 	"encoding/binary"
 	"encoding/json"
 	"errors"
-	"github.com/amnezia-vpn/amneziawg-go/device"
+	"github.com/amnezia-vpn/amneziawg-go/v3/device"
 	"golang.org/x/net/icmp"
 	"golang.org/x/net/ipv4"
 	"golang.org/x/net/ipv6"
@@ -26,7 +26,7 @@ import (
 
 	"net/netip"
 
-	"github.com/amnezia-vpn/amneziawg-go/tun/netstack"
+	"github.com/amnezia-vpn/amneziawg-go/v3/tun/netstack"
 )
 
 // errorLogger is the logger to print error message
@@ -306,6 +306,22 @@ func (conf *TCPServerTunnelConfig) SpawnRoutine(vt *VirtualTun) {
 			log.Fatal(err)
 		}
 		go tcpServerForward(vt, raddr, conn)
+	}
+}
+
+// SpawnRoutine spawns an SNI proxy server.
+func (config *SNIConfig) SpawnRoutine(vt *VirtualTun) {
+	listener, err := net.Listen("tcp", config.BindAddress)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	for {
+		conn, err := listener.Accept()
+		if err != nil {
+			log.Fatal(err)
+		}
+		go sniServe(vt.Tnet.Dial, conn)
 	}
 }
 

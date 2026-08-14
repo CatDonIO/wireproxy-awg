@@ -680,3 +680,260 @@ H1 = 2
 		t.Fatalf("unexpected error: %v", err)
 	}
 }
+
+func TestWireguardConfWithAWG3Params(t *testing.T) {
+	const config = `
+[Interface]
+PrivateKey = LAr1aNSNF9d0MjwUgAVC4020T0N/E5NUtqVv5EnsSz0=
+Address = 10.5.0.2
+DNS = 1.1.1.1
+Jc = 5
+Jmin = 10
+Jmax = 50
+S1 = 12
+S2 = 15
+S3 = 18
+S4 = 21
+H1 = 100
+H2 = 200
+H3 = 300
+H4 = 400
+HeaderProtectionKey = e8LKAc+f9xEzq9Ar7+MfKRrs+gZ/4yzvpRJLRJ/VJ1w=
+ContentPaddingAddition = 10-100
+RekeyAfterTime = 100-120
+RekeyTimeout = 5
+RejectAfterTime = 180-200
+KeepaliveTimeout = 10-15
+MaxHandshakeAttempts = 18-20
+
+[Peer]
+PublicKey = e8LKAc+f9xEzq9Ar7+MfKRrs+gZ/4yzvpRJLRJ/VJ1w=
+AllowedIPs = 0.0.0.0/0
+Endpoint = 94.140.11.15:51820
+PersistentKeepalive = 15-25
+`
+
+	var cfg DeviceConfig
+	iniData, err := loadIniConfig(config)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if err = ParseInterface(iniData, &cfg); err != nil {
+		t.Fatal(err)
+	}
+	if err = ParsePeers(iniData, &cfg.Peers); err != nil {
+		t.Fatal(err)
+	}
+
+	if cfg.ASecConfig == nil {
+		t.Fatal("ASecConfig should be created")
+	}
+	if cfg.ASecConfig.headerProtectionKey == nil {
+		t.Fatal("HeaderProtectionKey should be parsed")
+	}
+	if cfg.Peers[0].KeepAlive != 15 || cfg.Peers[0].KeepAliveMax != 25 {
+		t.Fatalf("PersistentKeepalive range should be parsed, got %d-%d",
+			cfg.Peers[0].KeepAlive, cfg.Peers[0].KeepAliveMax)
+	}
+
+	ipcReq, err := CreateIPCRequest(&cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	expected := []string{
+		"header_protection_key=7bc2ca01cf9ff71133abd02befe31f291aecfa067fe32cefa5124b449fd5275c",
+		"content_padding_addition=10-100",
+		"rekey_after_time=100-120",
+		"rekey_timeout=5",
+		"reject_after_time=180-200",
+		"keepalive_timeout=10-15",
+		"max_handshake_attempts=18-20",
+		"persistent_keepalive_interval=15-25",
+	}
+	for _, line := range expected {
+		if !strings.Contains(ipcReq.IpcRequest, line) {
+			t.Fatalf("%q should be present in IPC request:\n%s", line, ipcReq.IpcRequest)
+		}
+	}
+}
+
+func TestWireguardConfWithoutAWG3ParamsEmitsNothing(t *testing.T) {
+	const config = `
+[Interface]
+PrivateKey = LAr1aNSNF9d0MjwUgAVC4020T0N/E5NUtqVv5EnsSz0=
+Address = 10.5.0.2
+DNS = 1.1.1.1
+Jc = 5
+Jmin = 10
+Jmax = 50
+
+[Peer]
+PublicKey = e8LKAc+f9xEzq9Ar7+MfKRrs+gZ/4yzvpRJLRJ/VJ1w=
+AllowedIPs = 0.0.0.0/0
+Endpoint = 94.140.11.15:51820
+PersistentKeepalive = 25
+`
+
+	var cfg DeviceConfig
+	iniData, err := loadIniConfig(config)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if err = ParseInterface(iniData, &cfg); err != nil {
+		t.Fatal(err)
+	}
+	if err = ParsePeers(iniData, &cfg.Peers); err != nil {
+		t.Fatal(err)
+	}
+
+	ipcReq, err := CreateIPCRequest(&cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for _, key := range []string{
+		"header_protection_key=",
+		"content_padding_addition=",
+		"rekey_after_time=",
+		"rekey_timeout=",
+		"reject_after_time=",
+		"keepalive_timeout=",
+		"max_handshake_attempts=",
+	} {
+		if strings.Contains(ipcReq.IpcRequest, key) {
+			t.Fatalf("%q should not be emitted when it is not set", key)
+		}
+	}
+	if !strings.Contains(ipcReq.IpcRequest, "persistent_keepalive_interval=25\n") {
+		t.Fatalf("a single PersistentKeepalive value should stay a single value:\n%s", ipcReq.IpcRequest)
+	}
+}
+
+func TestWireguardConfWithHeaderProtectionAndSmallPaddings(t *testing.T) {
+	const config = `
+[Interface]
+PrivateKey = LAr1aNSNF9d0MjwUgAVC4020T0N/E5NUtqVv5EnsSz0=
+Address = 10.5.0.2
+DNS = 1.1.1.1
+S1 = 12
+S2 = 15
+S3 = 18
+S4 = 11
+HeaderProtectionKey = e8LKAc+f9xEzq9Ar7+MfKRrs+gZ/4yzvpRJLRJ/VJ1w=
+`
+
+	var cfg DeviceConfig
+	iniData, err := loadIniConfig(config)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	err = ParseInterface(iniData, &cfg)
+	if err == nil {
+		t.Fatal("error expected")
+	}
+	expectedError := "values of the S1-S4 fields must all be at least 12 when HeaderProtectionKey is set"
+	if err.Error() != expectedError {
+		t.Fatalf("error expected: %s, got: %s", expectedError, err.Error())
+	}
+}
+
+func TestWireguardConfWithHeaderProtectionAndMissingPadding(t *testing.T) {
+	const config = `
+[Interface]
+PrivateKey = LAr1aNSNF9d0MjwUgAVC4020T0N/E5NUtqVv5EnsSz0=
+Address = 10.5.0.2
+DNS = 1.1.1.1
+S1 = 12
+S2 = 15
+S3 = 18
+HeaderProtectionKey = e8LKAc+f9xEzq9Ar7+MfKRrs+gZ/4yzvpRJLRJ/VJ1w=
+`
+
+	var cfg DeviceConfig
+	iniData, err := loadIniConfig(config)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if err = ParseInterface(iniData, &cfg); err == nil {
+		t.Fatal("error expected: S4 is left at its default of 0")
+	}
+}
+
+func TestWireguardConfWithInvalidAWG3Range(t *testing.T) {
+	const config = `
+[Interface]
+PrivateKey = LAr1aNSNF9d0MjwUgAVC4020T0N/E5NUtqVv5EnsSz0=
+Address = 10.5.0.2
+DNS = 1.1.1.1
+RekeyTimeout = 30-10
+`
+
+	var cfg DeviceConfig
+	iniData, err := loadIniConfig(config)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	err = ParseInterface(iniData, &cfg)
+	if err == nil {
+		t.Fatal("error expected")
+	}
+	expectedError := "invalid RekeyTimeout value: invalid range: lower bound cannot exceed upper bound"
+	if err.Error() != expectedError {
+		t.Fatalf("error expected: %s, got: %s", expectedError, err.Error())
+	}
+}
+
+func TestWireguardConfWithInvalidHeaderProtectionKey(t *testing.T) {
+	const config = `
+[Interface]
+PrivateKey = LAr1aNSNF9d0MjwUgAVC4020T0N/E5NUtqVv5EnsSz0=
+Address = 10.5.0.2
+DNS = 1.1.1.1
+HeaderProtectionKey = not-a-key
+`
+
+	var cfg DeviceConfig
+	iniData, err := loadIniConfig(config)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if err = ParseInterface(iniData, &cfg); err == nil {
+		t.Fatal("error expected")
+	}
+}
+
+func TestWireguardConfWithPersistentKeepaliveOff(t *testing.T) {
+	const config = `
+[Interface]
+PrivateKey = LAr1aNSNF9d0MjwUgAVC4020T0N/E5NUtqVv5EnsSz0=
+Address = 10.5.0.2
+DNS = 1.1.1.1
+
+[Peer]
+PublicKey = e8LKAc+f9xEzq9Ar7+MfKRrs+gZ/4yzvpRJLRJ/VJ1w=
+AllowedIPs = 0.0.0.0/0
+Endpoint = 94.140.11.15:51820
+PersistentKeepalive = off
+`
+
+	var cfg DeviceConfig
+	iniData, err := loadIniConfig(config)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if err = ParsePeers(iniData, &cfg.Peers); err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Peers[0].KeepAlive != 0 || cfg.Peers[0].KeepAliveMax != 0 {
+		t.Fatalf("off should disable keepalive, got %d-%d",
+			cfg.Peers[0].KeepAlive, cfg.Peers[0].KeepAliveMax)
+	}
+}

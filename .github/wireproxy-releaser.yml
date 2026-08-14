@@ -1,3 +1,4 @@
+version: 2
 project_name: Build wireproxy
 before:
   hooks:
@@ -35,7 +36,7 @@ universal_binaries:
 checksum:
   name_template: "checksums.txt"
 snapshot:
-  name_template: "wireproxy"
+  version_template: "wireproxy"
 archives:
   - name_template: "wireproxy_{{ .Os }}_{{ .Arch }}"
     files:

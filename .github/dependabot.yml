@@ -1,0 +1,28 @@
+version: 2
+updates:
+  # The actions are pinned to a commit, which is what keeps a moved tag from
+  # silently getting write access to this repository. Dependabot is what keeps
+  # those pins from going stale - it bumps the commit and the version comment.
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: monthly
+    groups:
+      actions:
+        patterns:
+          - "*"
+
+  # This is a proxy: x/crypto and x/net are on its critical path, and
+  # amneziawg-go is where the protocol itself lives. Grouped so the noise is one
+  # pull request a month, but amneziawg-go is kept separate - a protocol bump is
+  # worth reading on its own.
+  - package-ecosystem: gomod
+    directory: /
+    schedule:
+      interval: monthly
+    groups:
+      go-dependencies:
+        patterns:
+          - "*"
+        exclude-patterns:
+          - "github.com/amnezia-vpn/*"
